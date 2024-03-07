@@ -1,0 +1,143 @@
+import cv2 as cv
+import numpy as np
+
+def nada(x):
+    pass
+
+def inicializar_barras_deslizantes():
+    cv.namedWindow('Barras BGR')
+    cv.createTrackbar('Azul Min', 'Barras BGR', 0, 255, nada)
+    cv.createTrackbar('Verde Min', 'Barras BGR', 0, 255, nada)
+    cv.createTrackbar('Rojo Min', 'Barras BGR', 0, 255, nada)
+    cv.createTrackbar('Azul Max', 'Barras BGR', 255, 255, nada)
+    cv.createTrackbar('Verde Max', 'Barras BGR', 255, 255, nada)
+    cv.createTrackbar('Rojo Max', 'Barras BGR', 255, 255, nada)
+
+    cv.namedWindow('Parametros Adicionales')
+    cv.createTrackbar('Tamano de Kernel', 'Parametros Adicionales', 5, 20, nada)
+    cv.createTrackbar('Iteraciones de Cierre', 'Parametros Adicionales', 3, 10, nada)
+    cv.createTrackbar('Iteraciones de Apertura', 'Parametros Adicionales', 1, 10, nada)
+    cv.createTrackbar('Contornos Mas Grandes', 'Parametros Adicionales', 2, 10, nada)
+    cv.createTrackbar('Inversion de Reemplazo', 'Parametros Adicionales', 0, 1, nada)
+
+
+def procesar_cuadro_con_bgr_y_contornos(cuadro, nuevo_fondo):
+    azul_min = cv.getTrackbarPos('Azul Min', 'Barras BGR')
+    verde_min = cv.getTrackbarPos('Verde Min', 'Barras BGR')
+    rojo_min = cv.getTrackbarPos('Rojo Min', 'Barras BGR')
+    azul_max = cv.getTrackbarPos('Azul Max', 'Barras BGR')
+    verde_max = cv.getTrackbarPos('Verde Max', 'Barras BGR')
+    rojo_max = cv.getTrackbarPos('Rojo Max', 'Barras BGR')
+
+    tamano_kernel = cv.getTrackbarPos('Tamano de Kernel', 'Parametros Adicionales')
+    iter_cierre = cv.getTrackbarPos('Iteraciones de Cierre', 'Parametros Adicionales')
+    iter_apertura = cv.getTrackbarPos('Iteraciones de Apertura', 'Parametros Adicionales')
+    contornos_grandes = cv.getTrackbarPos('Contornos Mas Grandes', 'Parametros Adicionales')
+    inversion_reemplazo = cv.getTrackbarPos('Inversion de Reemplazo', 'Parametros Adicionales')
+
+    tamano_kernel = max(1, tamano_kernel if tamano_kernel % 2 != 0 else tamano_kernel + 1)
+
+    bgr_inferior = np.array([azul_min, verde_min, rojo_min])
+    bgr_superior = np.array([azul_max, verde_max, rojo_max])
+
+    bgr_filtrado = cv.inRange(cuadro, bgr_inferior, bgr_superior)
+
+    contornos, _ = cv.findContours(bgr_filtrado, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+    contornos = sorted(contornos, key=cv.contourArea, reverse=True)[:max(1, contornos_grandes)]
+
+    mascara = np.zeros(cuadro.shape[:2], dtype="uint8")
+    cv.drawContours(mascara, contornos, -1, 255, thickness=cv.FILLED)
+
+    mascara = refinar_mascara(mascara, tamano_kernel, iter_cierre, iter_apertura)
+
+    mascara_inv = cv.bitwise_not(mascara)
+
+    if inversion_reemplazo:
+        cuadro_final = cv.bitwise_and(nuevo_fondo, nuevo_fondo, mask=mascara)
+        cuadro_final = cv.add(cuadro_final, cv.bitwise_and(cuadro, cuadro, mask=mascara_inv))
+    else:
+        cuadro_final = cv.bitwise_and(nuevo_fondo, nuevo_fondo, mask=mascara_inv)
+        cuadro_final = cv.add(cuadro_final, cv.bitwise_and(cuadro, cuadro, mask=mascara))
+
+    return cuadro_final
+
+def refinar_mascara(mascara, tamano_kernel, iter_cierre, iter_apertura):
+    kernel_cierre = np.ones((tamano_kernel, tamano_kernel), np.uint8)
+    kernel_apertura = np.ones((tamano_kernel, tamano_kernel), np.uint8)
+
+    mascara_cerrada = cv.morphologyEx(mascara, cv.MORPH_CLOSE, kernel_cierre, iterations=iter_cierre)
+    mascara_abierta = cv.morphologyEx(mascara_cerrada, cv.MORPH_OPEN, kernel_apertura, iterations=iter_apertura)
+
+    return mascara_abierta
+
+
+def seleccionar_roi(cuadro):
+    roi = cv.selectROI("Seleccionar ROI", cuadro, fromCenter=False, showCrosshair=True)
+    cv.destroyWindow("Seleccionar ROI")
+    return roi
+
+def procesar_cuadro_dentro_de_roi(cuadro, roi, nuevo_fondo):
+    x, y, w, h = roi
+
+    cuadro_roi = cuadro[y:y+h, x:x+w]
+    roi_procesado = procesar_cuadro_con_bgr_y_contornos(cuadro_roi, nuevo_fondo[y:y+h, x:x+w])
+    cuadro[y:y+h, x:x+w] = roi_procesado
+
+    return cuadro
+
+
+def obtener_cuadro_fondo(bg_cap, tamano_cuadro):
+    ret_bg, cuadro_bg = bg_cap.read()
+
+    if not ret_bg:
+        bg_cap.set(cv.CAP_PROP_POS_FRAMES, 0)
+        ret_bg, cuadro_bg = bg_cap.read()
+        if not ret_bg:
+            return None
+
+    cuadro_bg_redimensionado = cv.resize(cuadro_bg, tamano_cuadro)
+    return cuadro_bg_redimensionado
+
+
+
+def ejecutar_camara():
+    cap = cv.VideoCapture(0)
+
+    ruta_video_fondo = r"E:\Downloads\Minecraft lava background.mp4"
+    bg_cap = cv.VideoCapture(ruta_video_fondo)
+
+    if not cap.isOpened():
+        print("Error: No se puede abrir la camara.")
+        exit()
+
+    if not bg_cap.isOpened():
+        print("Error: No se puede abrir el video de fondo.")
+        exit()
+
+    inicializar_barras_deslizantes()
+
+    while True:
+        ret, cuadro = cap.read()
+        if not ret:
+            break
+
+        altura_cuadro, ancho_cuadro = cuadro.shape[:2]
+        tamano_cuadro = (ancho_cuadro, altura_cuadro)
+
+        nuevo_fondo = obtener_cuadro_fondo(bg_cap, tamano_cuadro)
+        if nuevo_fondo is None:
+            print("Error: No se pudo leer el cuadro de fondo.")
+            break
+
+        cuadro_procesado = procesar_cuadro_con_bgr_y_contornos(cuadro, nuevo_fondo)
+        cv.imshow('cuadro Procesado', cuadro_procesado)
+
+        tecla = cv.waitKey(1) & 0xFF
+        if tecla == ord('q'):
+            break
+
+    cap.release()
+    bg_cap.release()
+    cv.destroyAllWindows()
+
+ejecutar_camara()
